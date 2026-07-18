@@ -1,0 +1,6 @@
+[tool.pytest.ini_options]
+# Rootdir-relative imports (e.g. `from src.graph_builder import ...`) need the repo root on
+# sys.path. pytest adds testpaths' parent dirs automatically in "rootdir" mode, but being
+# explicit here avoids depending on how pytest is invoked (from the repo root vs. from tests/).
+pythonpath = ["."]
+testpaths = ["tests"]
