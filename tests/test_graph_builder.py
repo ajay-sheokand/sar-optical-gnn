@@ -111,24 +111,73 @@ class TestBuildGraphFromImage:
 
         assert len(np.unique(labels_default)) == len(np.unique(labels_explicit))
 
-    def test_single_segment_image_raises_keyerror(self):
+    def test_single_segment_image_produces_one_node_graph(self):
         """
-        Known, currently-unfixed limitation — documented here rather than silently tolerated.
-
-        If SLIC collapses an image into a single segment (this reliably happens on pure random
-        noise, where there's no spatial color structure for SLIC's k-means step to latch onto),
-        skimage's RAG constructor ends up with *zero* graph nodes, even though the label array is
-        non-empty. `rag_mean_color` then crashes with a KeyError while trying to accumulate pixel
-        statistics into a node that was never created.
-
-        This isn't something this project's SAR imagery is expected to trigger in practice (real
-        remote-sensing scenes have spatial structure), but it's a real upstream skimage behavior,
-        not a hypothetical. Tracked for a real fix in M2 (see docs/RESEARCH_PLAN.md §7) — when
-        that's fixed, this test should be updated to assert the new, non-crashing behavior instead
-        of `pytest.raises`.
+        Regression test for a bug fixed in M2 — previously documented here (M0) as a known,
+        unfixed limitation raising KeyError, now fixed. See src/graph_builder.py's module
+        docstring and docs/BUILD_LOG.md's M2 entry for the full story: skimage's RAG class only
+        creates a node when it detects an edge between two differently-labeled pixels, so a
+        single-segment image (SLIC reliably collapses pure random noise into one segment — no
+        spatial color structure for its k-means step to latch onto) used to produce a zero-node
+        graph and crash downstream. It now produces a valid one-node, zero-edge graph instead.
         """
         rng = np.random.default_rng(0)
         noise_image = rng.random((32, 32, 3)).astype(np.float32)
 
-        with pytest.raises(KeyError):
-            build_graph_from_image(noise_image, num_segments=50)
+        graph, labels = build_graph_from_image(noise_image, num_segments=50)
+
+        assert len(np.unique(labels)) == 1
+        assert graph.number_of_nodes() == 1
+        assert graph.number_of_edges() == 0
+        only_node = next(iter(graph.nodes()))
+        assert graph.nodes[only_node]["pixel count"] == 32 * 32
+
+    def test_works_on_2_channel_sar_like_image(self):
+        """
+        The multi-channel bug this project actually found in M2 (see src/graph_builder.py's
+        module docstring): skimage.graph.rag_mean_color hardcodes a 3-element color accumulator
+        and breaks on anything that isn't exactly 3 channels. Real Sentinel-1 SAR input is 2
+        channels (VV, VH) -- this must work end to end, not just in isolation
+        (tests/graph/test_pooling.py already checks the underlying scatter_pool function directly;
+        this checks the full build_graph_from_image pipeline on top of it).
+        """
+        image = make_block_image(block_size=16, grid=4)
+        sar_like = image[:, :, :2].astype(np.float32)  # first 2 of the 3 synthetic channels
+
+        graph, labels = build_graph_from_image(sar_like, num_segments=16)
+
+        assert graph.number_of_nodes() > 0
+        only_node = next(iter(graph.nodes()))
+        assert graph.nodes[only_node]["mean color"].shape == (2,)
+
+    def test_works_on_12_channel_optical_like_image(self):
+        """The other direction: full multispectral Sentinel-2 (12 bands), not just SAR's 2."""
+        rng = np.random.default_rng(0)
+        multispectral = rng.random((32, 32, 12)).astype(np.float32)
+
+        graph, labels = build_graph_from_image(multispectral, num_segments=20)
+
+        assert graph.number_of_nodes() > 0
+        only_node = next(iter(graph.nodes()))
+        assert graph.nodes[only_node]["mean color"].shape == (12,)
+
+    def test_edge_weight_is_distance_between_mean_colors(self):
+        """
+        Locks in the specific edge-weight formula (matches skimage.graph.rag_mean_color's default
+        "distance" mode: Euclidean distance between the two nodes' mean colors) against a
+        hand-computable case: two large, constant-valued, spatially separated blocks (small
+        images -- e.g. 4x4 -- turned out to be too small for SLIC to reliably split at all; it
+        collapsed one such attempt into a single segment, the same collapse behavior exercised
+        deliberately in test_single_segment_image_produces_one_node_graph above, so this test
+        uses the same block size proven to produce distinct regions in make_block_image).
+        """
+        image = np.zeros((32, 16, 1), dtype=np.float32)
+        image[:16] = 10.0
+        image[16:] = 13.0  # constant, known offset -> exact expected edge weight of 3.0
+
+        graph, labels = build_graph_from_image(image, num_segments=2)
+
+        assert graph.number_of_nodes() == 2
+        assert graph.number_of_edges() == 1
+        (u, v, data) = next(iter(graph.edges(data=True)))
+        assert data["weight"] == pytest.approx(3.0)
