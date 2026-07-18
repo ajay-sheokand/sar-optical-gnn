@@ -3,9 +3,13 @@ Tests for src/graph_builder.py — the superpixel + Region Adjacency Graph (RAG)
 
 Why this file matters beyond "does it crash": this is the piece of the pipeline that turns a raw
 image into the graph a GNN can operate on (see docs/UNDERSTANDING_THE_PROJECT.md §3.1 for the
-regionalization/spatial-weights-matrix analogy). Bugs here are easy to miss visually — a graph
-with the wrong number of nodes, or edges connecting non-adjacent regions, still "looks fine" if
-you just eyeball a plot — so this needs real assertions, not just "it ran without an exception."
+regionalization/spatial-weights-matrix analogy). Bugs here are easy to miss numerically — a
+"correct" node/edge count doesn't tell you whether the segmentation is actually following image
+content or degenerately grid-like. That specific failure mode (see
+test_segmentation_is_not_a_rigid_grid below) was only caught by actually rendering
+build_graph_from_image's output against real data with scripts/visualize_sample.py, not by any
+number-only test — worth remembering as a general lesson: shape/count assertions and looking at
+the actual output catch different classes of bugs, neither substitutes for the other.
 
 We use skimage's bundled astronaut() photo as a stand-in for a real, structured image (it ships
 with scikit-image, no network access needed). Pure synthetic block images are used where we need
@@ -15,7 +19,9 @@ region count is approximate, not exact).
 
 import numpy as np
 import pytest
+from scipy.ndimage import gaussian_filter
 from skimage.data import astronaut
+from skimage.measure import regionprops
 
 from src.graph_builder import build_graph_from_image
 
@@ -181,3 +187,35 @@ class TestBuildGraphFromImage:
         assert graph.number_of_edges() == 1
         (u, v, data) = next(iter(graph.edges(data=True)))
         assert data["weight"] == pytest.approx(3.0)
+
+    def test_segmentation_is_not_a_rigid_grid(self):
+        """
+        Regression test for a real finding from actually visualizing this function's output
+        against downloaded SAR data (scripts/visualize_sample.py; see src/graph_builder.py's
+        module docstring and docs/BUILD_LOG.md for the full story): the default `compactness`
+        used to produce a near-perfectly regular grid on real SAR patches -- 100% of superpixels
+        were exact rectangles -- instead of content-adaptive regions, and no purely numeric test
+        (node count, edge count, shapes) caught this, because a rigid grid is a "valid" RAG by
+        every one of those measures.
+
+        The metric used here, `extent` (skimage.measure.regionprops: the fraction of a region's
+        bounding box that the region itself actually fills), is what caught it: exactly 1.0 for a
+        rectangle, meaningfully lower for an irregular shape. This test uses smoothed random
+        noise (not real downloaded data, so it runs in any environment) specifically because it
+        has organic, blob-like structure similar in spirit to real speckle texture, unlike the
+        flat-colored block images used elsewhere in this file, which are *supposed* to segment
+        into clean rectangles and would wrongly fail this exact check.
+        """
+        rng = np.random.default_rng(0)
+        noise = rng.normal(size=(112, 112, 1)).astype(np.float32)
+        smoothly_varying_image = gaussian_filter(noise, sigma=(3, 3, 0))
+
+        _, labels = build_graph_from_image(smoothly_varying_image, num_segments=100)
+
+        extents = [region.extent for region in regionprops(labels)]
+        mean_extent = float(np.mean(extents))
+        assert mean_extent < 0.9, (
+            f"mean superpixel extent {mean_extent:.3f} is suspiciously close to 1.0 (a perfect "
+            f"rectangle) -- segmentation may have degenerated into a rigid grid instead of "
+            f"following image content, the exact failure mode this test guards against"
+        )

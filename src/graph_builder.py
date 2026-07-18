@@ -22,6 +22,20 @@ The fix for both: use skimage's RAG class only for what it does correctly (detec
 structure), and compute per-node mean color ourselves via src.graph.pooling.scatter_pool, which is
 channel-count-agnostic and vectorized (no per-pixel Python loop). Any node missing from the RAG
 after adjacency detection (bug 2) gets added explicitly.
+
+A third finding, from actually visualizing (not just numerically testing) this function's output
+against real downloaded SAR data (scripts/visualize_sample.py, docs/BUILD_LOG.md's real-data-
+validation entry): the original hardcoded `compactness=10` produced a near-perfectly regular grid
+on real SAR patches, not content-adaptive regions — checked quantitatively across 8 real samples
+via each region's `extent` (skimage.measure.regionprops' fraction of a region's bounding box the
+region actually fills): compactness=10 gave a mean extent of 1.000 with zero variance, i.e. every
+single region was a perfect rectangle. This isn't a value-range/scaling artifact (rescaling SAR
+values to a 0-255 range with the same compactness=10 didn't change this) — it's that SAR speckle
+noise gives SLIC a weak, noisy local color-similarity signal, and compactness=10 weights spatial
+regularity heavily enough to dominate it entirely. compactness=0.1 (the new default) gave a mean
+extent of 0.551 with real variance — genuinely irregular, content-following shapes. `compactness`
+is now a parameter (not hardcoded) specifically so this can be revisited per-modality or as a
+future ablation, rather than baked in silently a second time.
 """
 
 import networkx as nx
@@ -32,7 +46,7 @@ from skimage.segmentation import slic
 from src.graph.pooling import scatter_pool
 
 
-def build_graph_from_image(image_data, num_segments=100, channel_axis=-1):
+def build_graph_from_image(image_data, num_segments=100, channel_axis=-1, compactness=0.1):
     """
     Segment `image_data` into superpixels and build the Region Adjacency Graph connecting them.
 
@@ -46,7 +60,17 @@ def build_graph_from_image(image_data, num_segments=100, channel_axis=-1):
             channel") already matches this project's (H, W, C) convention and this project's
             installed skimage version already defaults to the same value — this parameter exists
             for explicitness and to protect against a future skimage version changing its default
-            silently, not because a real bug was found here (unlike the two described above).
+            silently, not because a real bug was found here (unlike the other findings described
+            in this module's docstring).
+        compactness: passed to `slic()` — trades off spatial regularity against color/backscatter
+            similarity (higher = more grid-like, lower = more content-adaptive). Default changed
+            from skimage's own default of 10 to 0.1 after visualizing this function's output
+            against real SAR data and finding 10 produced a near-perfect rigid grid, not real
+            regions — see this module's docstring for the quantitative evidence. 3-channel RGB
+            photos (e.g. tests using skimage's astronaut() sample) still segment sensibly at 0.1;
+            this hasn't been re-validated for optical satellite imagery specifically (Sentinel-2
+            has much higher color contrast than SAR speckle, so it may tolerate a wider range of
+            compactness values, but that's not yet checked against real data the way SAR was).
 
     Returns:
         (nx_graph, labels) — nx_graph is a networkx.Graph with one node per superpixel (node id =
@@ -58,7 +82,7 @@ def build_graph_from_image(image_data, num_segments=100, channel_axis=-1):
     labels = slic(
         image_data,
         n_segments=num_segments,
-        compactness=10,
+        compactness=compactness,
         start_label=1,
         channel_axis=channel_axis,
     )
