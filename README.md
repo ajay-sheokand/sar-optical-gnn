@@ -5,10 +5,11 @@ Research project: SAR-to-optical image translation using a superpixel Region-Adj
 on paired Sentinel-1/Sentinel-2 imagery and evaluated against GAN/diffusion baselines plus a
 downstream land-cover-classification-fidelity check.
 
-**Status**: early build-out, milestone M0 (repo hygiene) in progress. See `docs/` locally for the
-full research plan, background, literature review, and build log — that folder is intentionally
-git-ignored (it's local working material, not meant to ship in the repo), so if you're reading this
-on GitHub without local access to it, ask whoever's running the project for the docs directly.
+**Status**: M0 (repo hygiene) and M1 (data pipeline) done; M2 (graph construction at scale) is
+next. See `docs/` locally for the full research plan, background, literature review, and a
+build-by-build log of what was done and why — that folder is intentionally git-ignored (it's local
+working material, not meant to ship in the repo), so if you're reading this on GitHub without local
+access to it, ask whoever's running the project for the docs directly.
 
 ## The one-paragraph version
 
@@ -23,14 +24,18 @@ standard pixel-wise GAN baselines (pix2pix, CycleGAN).
 
 ```
 sar-optical-gnn/
-├── data_loader.py       # Google Earth Engine fetch for the Delhi ROI (qualitative demo target)
 ├── src/
-│   └── graph_builder.py # superpixel segmentation + Region Adjacency Graph construction
-├── tests/
-│   └── test_graph_builder.py
+│   ├── graph_builder.py    # superpixel segmentation + Region Adjacency Graph construction
+│   └── datasets/
+│       ├── common.py       # shared CHW->HWC array conversion used by every loader
+│       ├── bigearthnet.py  # primary dataset: paired S1/S2 + real CORINE land-cover labels
+│       ├── sen1_2.py       # validation harness: reproduce literature baseline numbers on this
+│       ├── sen12ms.py      # secondary: superpixel-granularity ablation, generalization check
+│       └── delhi_gee.py    # Earth Engine fetch/export for the Delhi ROI qualitative demo
+├── tests/                  # mirrors src/ layout
 ├── requirements.txt
-├── pyproject.toml       # pytest config
-└── docs/                # (git-ignored, local only) research plan, literature review, build log
+├── pyproject.toml          # pytest config
+└── docs/                   # (git-ignored, local only) research plan, literature review, build log
 ```
 
 ## Setup
@@ -41,9 +46,9 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Some heavier dependencies (`torchgeo`, `lpips`, `torch-fidelity`, `torchmetrics`) are pinned but
-commented out in `requirements.txt` until the milestones that actually need them — see that file
-for which milestone pulls in what.
+A couple of evaluation-only dependencies (`lpips`, `torch-fidelity`) are pinned but commented out
+in `requirements.txt` until M5 actually needs them — see that file for which milestone pulls in
+what.
 
 ## Running tests
 
