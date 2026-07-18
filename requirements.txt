@@ -3,7 +3,7 @@
 # milestone (docs/RESEARCH_PLAN.md §7) pulls each one in, rather than installing everything for
 # every stage of the project up front.
 
-# --- Core (already used by data_loader.py and src/graph_builder.py) ---
+# --- Core (used by src/datasets/delhi_gee.py and src/graph_builder.py) ---
 torch==2.12.1
 torch-geometric==2.8.0
 earthengine-api==1.7.33
@@ -18,15 +18,18 @@ networkx==3.6.1
 # --- M0: testing ---
 pytest==9.1.1
 
-# --- M1: dataset loaders (BigEarthNet via torchgeo, SEN1-2/SEN12MS custom loaders) ---
-# Not yet installed — torchgeo pulls in a large tree (geopandas, pytorch-lightning, kornia, timm,
-# segmentation-models-pytorch, ...). Verified during M0 that all of it has working Python 3.14
-# wheels (no source builds required), but left uninstalled until M1 actually needs it, so M0's
-# environment stays light.
-# torchgeo==0.9.0
+# --- M1: dataset loaders ---
+# torchgeo backs src/datasets/bigearthnet.py and src/datasets/sen12ms.py (SEN1-2 in
+# src/datasets/sen1_2.py is a from-scratch loader, no torchgeo class exists for it). Installing
+# torchgeo also pulls in a large tree (geopandas, pytorch-lightning, kornia, timm,
+# segmentation-models-pytorch, torchmetrics, torchvision, ...) — all verified for Python 3.14
+# wheel availability during M0, and now actually installed as of M1.
+torchgeo==0.9.0
+torchvision==0.27.1
 
 # --- M5: evaluation metrics (SSIM/PSNR/LPIPS/FID) ---
-# Also verified for Python 3.14 wheel availability during M0, left uninstalled until M5.
+# torchmetrics arrived as a torchgeo dependency already (pinned above at the version torchgeo
+# pulled in); lpips and torch-fidelity are the two still not needed until M5.
+torchmetrics==1.9.0
 # lpips==0.1.4
 # torch-fidelity==0.4.0
-# torchmetrics==1.9.0
