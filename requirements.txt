@@ -26,6 +26,13 @@ pytest==9.1.1
 # wheel availability during M0, and now actually installed as of M1.
 torchgeo==0.9.0
 torchvision==0.27.1
+# scipy and Pillow: needed by src/datasets/sarptical.py (a real dataset downloaded and validated
+# end-to-end after M2 — see docs/BUILD_LOG.md — before committing to BigEarthNet's much larger
+# download). scipy.io.loadmat reads the dataset's .mat SAR patches; Pillow reads its .png optical
+# patches. scipy already arrived transitively (via rasterio), Pillow via torchvision; pinned
+# explicitly here since this project's own code imports both directly, not just transitively.
+scipy==1.18.0
+pillow==12.3.0
 
 # --- M5: evaluation metrics (SSIM/PSNR/LPIPS/FID) ---
 # torchmetrics arrived as a torchgeo dependency already (pinned above at the version torchgeo

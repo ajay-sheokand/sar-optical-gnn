@@ -152,13 +152,17 @@ def _load_dataset(name: str, root: str):
         from src.datasets.sen1_2 import SEN1_2Dataset
 
         return SEN1_2Dataset(root=root)
-    raise ValueError(f"unknown dataset {name!r}; expected bigearthnet, sen12ms, or sen1_2")
+    if name == "sarptical":
+        from src.datasets.sarptical import SARpticalDataset
+
+        return SARpticalDataset(root=root)
+    raise ValueError(f"unknown dataset {name!r}; expected bigearthnet, sen12ms, sen1_2, or sarptical")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--benchmark", action="store_true", help="run the synthetic-data throughput benchmark")
-    parser.add_argument("--dataset", choices=["bigearthnet", "sen12ms", "sen1_2"], help="dataset to process")
+    parser.add_argument("--dataset", choices=["bigearthnet", "sen12ms", "sen1_2", "sarptical"], help="dataset to process")
     parser.add_argument("--root", help="dataset root directory (must already be downloaded)")
     parser.add_argument("--out", help="output directory for cached .npz graph files")
     parser.add_argument("--num-segments", type=int, default=100)
