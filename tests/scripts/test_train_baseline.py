@@ -24,6 +24,7 @@ from scripts.train_baseline import (
     split_dataset,
 )
 from src.datasets.adapter import TranslationDataset
+from src.eval.metrics import TranslationMetrics
 from src.models.losses import GANLoss
 
 
@@ -97,12 +98,31 @@ class TestPix2PixStep:
         device = torch.device("cpu")
         generator, _ = build_pix2pix(2, 3, num_downs=3, device=device)
         loader = torch.utils.data.DataLoader(tiny_dataset, batch_size=4)
+        metrics = TranslationMetrics(device=device)
 
-        result = evaluate_pix2pix(generator, loader, device)
+        result = evaluate_pix2pix(generator, loader, device, metrics)
 
         assert np.isfinite(result["psnr"])
         assert np.isfinite(result["ssim"])
         assert "fid" in result  # optical has 3 channels in this fixture, so FID should run
+
+    def test_reuses_caller_owned_metrics_instance_across_calls(self, tiny_dataset):
+        """Regression test for a real bug (docs/BUILD_LOG.md's M3 entry): evaluate_pix2pix used to
+        construct a fresh TranslationMetrics every call, and FrechetInceptionDistance's internal
+        reference cycle meant that memory was never reclaimed by ordinary refcounting -- it OOM'd
+        a real training run after 26 epochs. evaluate_pix2pix must accept and reset() a
+        caller-owned instance instead of building its own."""
+        device = torch.device("cpu")
+        generator, _ = build_pix2pix(2, 3, num_downs=3, device=device)
+        loader = torch.utils.data.DataLoader(tiny_dataset, batch_size=4)
+        metrics = TranslationMetrics(device=device)
+
+        first = evaluate_pix2pix(generator, loader, device, metrics)
+        second = evaluate_pix2pix(generator, loader, device, metrics)
+
+        # Same generator, same (deterministic) data -> results should match, which they'd only do
+        # if reset() actually cleared accumulated state between the two calls.
+        assert first["ssim"] == pytest.approx(second["ssim"])
 
 
 class TestCycleGANStep:
@@ -171,8 +191,9 @@ class TestCycleGANStep:
         device = torch.device("cpu")
         g_ab, _, _, _ = build_cyclegan(2, 3, n_residual_blocks=1, device=device)
         loader = torch.utils.data.DataLoader(tiny_dataset, batch_size=4)
+        metrics = TranslationMetrics(device=device)
 
-        result = evaluate_cyclegan(g_ab, loader, device)
+        result = evaluate_cyclegan(g_ab, loader, device, metrics)
 
         assert np.isfinite(result["psnr"])
         assert np.isfinite(result["ssim"])

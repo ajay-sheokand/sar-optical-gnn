@@ -110,8 +110,14 @@ def pix2pix_train_step(generator, discriminator, opt_g, opt_d, gan_loss, sar, op
 
 
 @torch.no_grad()
-def evaluate_pix2pix(generator, val_loader, device):
-    metrics = TranslationMetrics(device=device)
+def evaluate_pix2pix(generator, val_loader, device, metrics):
+    """`metrics` is a caller-owned TranslationMetrics instance, reset here rather than
+    constructed fresh each call -- see docs/BUILD_LOG.md's M3 entry: FrechetInceptionDistance
+    (inside TranslationMetrics) forms a Python reference cycle that ordinary refcounting never
+    collects, so building a new one every epoch leaked ~230MB/epoch and OOM'd a real training run
+    after 26 epochs. Reusing one instance for the whole training run sidesteps the leak instead of
+    papering over it with a per-epoch gc.collect()."""
+    metrics.reset()
     generator.eval()
     for batch in val_loader:
         sar, optical = batch["sar"].to(device), batch["optical"].to(device)
@@ -180,11 +186,13 @@ def cyclegan_train_step(
 
 
 @torch.no_grad()
-def evaluate_cyclegan(g_ab, val_loader, device):
+def evaluate_cyclegan(g_ab, val_loader, device, metrics):
     """Evaluates only the SAR->optical direction against real paired ground truth -- the
     direction comparable to pix2pix's output, even though CycleGAN never used the pairing during
-    training (see this module's docstring)."""
-    metrics = TranslationMetrics(device=device)
+    training (see this module's docstring). `metrics` is caller-owned and reset here, not
+    constructed fresh -- see evaluate_pix2pix's docstring for why (a real GPU-memory leak this
+    caused in a real training run)."""
+    metrics.reset()
     g_ab.eval()
     for batch in val_loader:
         sar, optical = batch["sar"].to(device), batch["optical"].to(device)
@@ -222,6 +230,10 @@ def train_pix2pix(dataset, args, device):
     opt_g = torch.optim.Adam(generator.parameters(), lr=args.lr, betas=(0.5, 0.999))
     opt_d = torch.optim.Adam(discriminator.parameters(), lr=args.lr, betas=(0.5, 0.999))
     gan_loss = GANLoss().to(device)
+    # Constructed once, reused every epoch (evaluate_pix2pix resets it) -- see its docstring for
+    # why: a fresh TranslationMetrics per epoch leaked GPU memory via FrechetInceptionDistance's
+    # reference cycle and OOM'd a real training run after 26 epochs.
+    metrics = TranslationMetrics(device=device)
 
     out_dir = Path(args.out)
     for epoch in range(1, args.epochs + 1):
@@ -234,7 +246,7 @@ def train_pix2pix(dataset, args, device):
             epoch_losses.append(losses)
 
         mean_losses = {k: sum(d[k] for d in epoch_losses) / len(epoch_losses) for k in epoch_losses[0]}
-        val_metrics = evaluate_pix2pix(generator, val_loader, device)
+        val_metrics = evaluate_pix2pix(generator, val_loader, device, metrics)
         elapsed = time.perf_counter() - start
 
         record = {"epoch": epoch, "elapsed_seconds": elapsed, "train_loss": mean_losses, "val_metrics": val_metrics}
@@ -255,6 +267,7 @@ def train_cyclegan(dataset, args, device):
     )
     opt_d = torch.optim.Adam(list(d_a.parameters()) + list(d_b.parameters()), lr=args.lr, betas=(0.5, 0.999))
     gan_loss = GANLoss().to(device)
+    metrics = TranslationMetrics(device=device)  # see train_pix2pix's comment on why this is reused
 
     out_dir = Path(args.out)
     for epoch in range(1, args.epochs + 1):
@@ -268,7 +281,7 @@ def train_cyclegan(dataset, args, device):
             epoch_losses.append(losses)
 
         mean_losses = {k: sum(d[k] for d in epoch_losses) / len(epoch_losses) for k in epoch_losses[0]}
-        val_metrics = evaluate_cyclegan(g_ab, val_loader, device)
+        val_metrics = evaluate_cyclegan(g_ab, val_loader, device, metrics)
         elapsed = time.perf_counter() - start
 
         record = {"epoch": epoch, "elapsed_seconds": elapsed, "train_loss": mean_losses, "val_metrics": val_metrics}

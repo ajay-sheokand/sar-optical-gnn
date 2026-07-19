@@ -103,3 +103,38 @@ class TestTranslationMetricsFID:
         metrics.update_fid(x, x)
         result = metrics.compute()
         assert result["fid"] == pytest.approx(0.0, abs=1.0)
+
+    @pytest.mark.slow
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="leak is GPU-memory-specific")
+    def test_reusing_one_instance_does_not_leak_gpu_memory(self):
+        """Regression test for a real bug that OOM'd a real training run (docs/BUILD_LOG.md's M3
+        entry): constructing a *new* TranslationMetrics every call leaks ~230MB each time, because
+        FrechetInceptionDistance forms a Python reference cycle ordinary refcounting never
+        collects (confirmed directly: gc.collect() after del makes the leak disappear, but nothing
+        in a normal training loop calls that). The fix is reuse-via-reset(), not manual GC calls --
+        this test constructs ONE instance and drives it through several cycles, the way
+        scripts/train_baseline.py's train_pix2pix/train_cyclegan now do, and asserts allocated GPU
+        memory stays roughly flat rather than climbing per cycle.
+        """
+        device = torch.device("cuda")
+        metrics = TranslationMetrics(device=device)
+
+        allocated_per_cycle = []
+        for _ in range(4):
+            metrics.reset()
+            real = torch.rand(4, 3, 64, 64, device=device) * 2 - 1
+            fake = torch.rand(4, 3, 64, 64, device=device) * 2 - 1
+            metrics.update_pixel_metrics(fake, real)
+            metrics.update_fid(fake, real)
+            metrics.compute()
+            del real, fake
+            allocated_per_cycle.append(torch.cuda.memory_allocated())
+
+        # A real per-construction leak grows by ~230MB every cycle (confirmed against the
+        # unfixed code); allow generous slack for legitimate allocator variation without masking
+        # that specific failure mode.
+        growth = allocated_per_cycle[-1] - allocated_per_cycle[0]
+        assert growth < 50_000_000, (
+            f"GPU memory grew by {growth / 1e6:.1f}MB across 4 reused cycles -- "
+            f"suggests TranslationMetrics is leaking again"
+        )
