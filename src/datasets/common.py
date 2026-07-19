@@ -18,6 +18,7 @@ so a training loop doesn't need to know which of the three source datasets a sam
 from __future__ import annotations
 
 import numpy as np
+import torch
 
 
 def chw_to_hwc(array) -> np.ndarray:
@@ -32,3 +33,44 @@ def chw_to_hwc(array) -> np.ndarray:
     if array.ndim != 3:
         raise ValueError(f"expected a 3D (C, H, W) array, got shape {array.shape}")
     return array.transpose(1, 2, 0).astype(np.float32)
+
+
+def normalize_to_tanh_range(image, low_percentile=2.0, high_percentile=98.0) -> np.ndarray:
+    """
+    Per-channel percentile stretch an (H, W, C) array into [-1, 1] -- the range every generator
+    in src/models/ produces via its final Tanh (see src/models/pix2pix.py, src/models/cyclegan.py)
+    and the range src/eval/metrics.py's TranslationMetrics assumes.
+
+    Percentile (not true min/max) stretch, independently per channel, for the same reason
+    scripts/visualize_sample.py's _normalize_for_display uses it: SAR backscatter in particular
+    tends to have a handful of extreme outlier pixels that would wash out the rest of the dynamic
+    range under a true min/max normalization. Per-channel (not per-image) because SAR's VV and VH
+    polarizations, and optical's individual spectral bands, have genuinely different value
+    distributions from each other -- a single shared low/high would let one channel dominate.
+
+    This is a per-sample normalization, not a dataset-wide statistic (e.g. a precomputed mean/std)
+    -- simpler to get right first, and avoids a training-time dependency on a normalization pass
+    over the whole dataset before training can start. Revisit if per-sample percentile noise
+    turns out to hurt training stability (an open question, not yet observed).
+    """
+    if image.ndim != 3:
+        raise ValueError(f"expected a 3D (H, W, C) array, got shape {image.shape}")
+
+    image = image.astype(np.float32)
+    low = np.percentile(image, low_percentile, axis=(0, 1), keepdims=True)
+    high = np.percentile(image, high_percentile, axis=(0, 1), keepdims=True)
+    # A fixed 1e-6 epsilon silently fails for a constant channel with a large-magnitude value
+    # (e.g. 42.0 + 1e-6 rounds back to exactly 42.0 in float32, since that exceeds float32's ~7
+    # significant digits) -- found by test_constant_channel_does_not_produce_nan actually failing
+    # with this fixed-epsilon version. Scaling the epsilon to the value's own magnitude keeps it
+    # representable regardless of how large low/high are.
+    eps = np.maximum(np.abs(low) * 1e-6, 1e-6)
+    high = np.where(high <= low, low + eps, high)
+    stretched = np.clip((image - low) / (high - low), 0, 1)
+    return (stretched * 2 - 1).astype(np.float32)
+
+
+def hwc_to_chw_tensor(image):
+    """Convert an (H, W, C) numpy array to a (C, H, W) float32 torch.Tensor -- the layout every
+    src/models/ generator and src/eval/metrics.py's TranslationMetrics expect."""
+    return torch.from_numpy(np.ascontiguousarray(image.transpose(2, 0, 1))).float()

@@ -34,9 +34,15 @@ torchvision==0.27.1
 scipy==1.18.0
 pillow==12.3.0
 
-# --- M5: evaluation metrics (SSIM/PSNR/LPIPS/FID) ---
+# --- M3: baseline evaluation metrics (SSIM/PSNR/FID) ---
 # torchmetrics arrived as a torchgeo dependency already (pinned above at the version torchgeo
-# pulled in); lpips and torch-fidelity are the two still not needed until M5.
+# pulled in). torch-fidelity backs torchmetrics' FID implementation (InceptionV3 features) --
+# needed now, not deferred to M5 as originally planned, because the SEN1-2 validation pass (§4)
+# itself checks our FID numbers against the literature's, not just PSNR/SSIM.
 torchmetrics==1.9.0
+torch-fidelity==0.4.0
+
+# --- M5: perceptual loss/metric ---
+# lpips isn't needed for M3's baselines (classic pix2pix/CycleGAN train on L1 + adversarial only,
+# no perceptual term) -- deferred until M4's graph-hybrid model, which the plan says uses it.
 # lpips==0.1.4
-# torch-fidelity==0.4.0

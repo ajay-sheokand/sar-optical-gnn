@@ -4,3 +4,6 @@
 # explicit here avoids depending on how pytest is invoked (from the repo root vs. from tests/).
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+    "slow: real (not synthetic-shortcut) checks that download/load a real model backbone or hit real data — excluded by default via `-m 'not slow'` in CI-speed runs, run explicitly otherwise.",
+]

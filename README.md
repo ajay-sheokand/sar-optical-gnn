@@ -10,10 +10,13 @@ full M0-M2 pipeline has been validated against a real downloaded dataset (SARpti
 finding and fixing a real segmentation bug (a hardcoded SLIC parameter that produced a rigid grid
 instead of real regions on actual SAR data) by rendering the pipeline's output with
 `scripts/visualize_sample.py` rather than trusting test counts alone. M3 (baseline models:
-pix2pix, CycleGAN) is next. See `docs/` locally for the full research plan, background, literature
-review, and a build-by-build log of what was done and why — that folder is intentionally
-git-ignored (it's local working material, not meant to ship in the repo), so if you're reading this
-on GitHub without local access to it, ask whoever's running the project for the docs directly.
+pix2pix, CycleGAN) is implemented, tested (134 tests), and proven to train end-to-end on real
+SARptical data via `scripts/train_baseline.py`; the literature-comparison run on SEN1-2 is pending
+a manual download (the official host blocks automated access). See `docs/` locally for the full
+research plan, background, literature review, and a build-by-build log of what was done and why —
+that folder is intentionally git-ignored (it's local working material, not meant to ship in the
+repo), so if you're reading this on GitHub without local access to it, ask whoever's running the
+project for the docs directly.
 
 ## The one-paragraph version
 
@@ -33,17 +36,26 @@ sar-optical-gnn/
 │   ├── graph/
 │   │   ├── pooling.py      # pixel<->node scatter pool (mean/max) and unpool
 │   │   └── features.py     # regionprops geometric features + channel mean/std per node
-│   └── datasets/
-│       ├── common.py       # shared CHW->HWC array conversion used by every loader
-│       ├── bigearthnet.py  # primary dataset: paired S1/S2 + real CORINE land-cover labels
-│       ├── sen1_2.py       # validation harness: reproduce literature baseline numbers on this
-│       ├── sen12ms.py      # secondary: superpixel-granularity ablation, generalization check
-│       ├── sarptical.py    # real, downloaded stretch dataset (10,108 pairs) used to validate
-│       │                   #   the whole M0-M2 pipeline against actual data
-│       └── delhi_gee.py    # Earth Engine fetch/export for the Delhi ROI qualitative demo
+│   ├── datasets/
+│   │   ├── common.py       # shared CHW->HWC conversion + tanh-range normalization, every loader
+│   │   ├── adapter.py       # wraps any loader into a model-ready torch.utils.data.Dataset
+│   │   ├── bigearthnet.py  # primary dataset: paired S1/S2 + real CORINE land-cover labels
+│   │   ├── sen1_2.py       # validation harness: reproduce literature baseline numbers on this
+│   │   ├── sen12ms.py      # secondary: superpixel-granularity ablation, generalization check
+│   │   ├── sarptical.py    # real, downloaded stretch dataset (10,108 pairs) used to validate
+│   │   │                   #   the whole M0-M2 pipeline against actual data
+│   │   └── delhi_gee.py    # Earth Engine fetch/export for the Delhi ROI qualitative demo
+│   ├── models/
+│   │   ├── blocks.py        # shared conv blocks + PatchGAN discriminator (pix2pix + CycleGAN)
+│   │   ├── pix2pix.py       # U-Net generator
+│   │   ├── cyclegan.py      # ResNet generator
+│   │   └── losses.py        # GAN/cycle-consistency/identity losses
+│   └── eval/
+│       └── metrics.py       # PSNR/SSIM/FID, accumulated via update()/compute()
 ├── scripts/
 │   ├── build_graphs_offline.py  # precompute/cache graphs to .npz; --benchmark mode
-│   └── visualize_sample.py      # render SAR/optical/segmentation/graph for one real sample
+│   ├── visualize_sample.py      # render SAR/optical/segmentation/graph for one real sample
+│   └── train_baseline.py        # train pix2pix or CycleGAN on any wired-in dataset
 ├── tests/                  # mirrors src/ and scripts/ layout
 ├── requirements.txt
 ├── pyproject.toml          # pytest config
