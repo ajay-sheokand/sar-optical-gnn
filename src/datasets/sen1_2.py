@@ -14,14 +14,20 @@ experiment (BigEarthNet). Same instinct as checking a new regression implementat
 textbook dataset with known coefficients before trusting it on real research data
 (docs/UNDERSTANDING_THE_PROJECT.md §6).
 
-On-disk layout assumed here, per the dataset's documented naming convention (Schmitt et al. 2018 —
-same research group and file-naming style as SEN12MS): SAR and optical patches are distributed in
-separate per-scene folders (e.g. `ROIs1970_fall_s1/`, `ROIs1970_fall_s2/`), each containing patch
-files whose names differ only in the "_s1_" / "_s2_" marker (e.g. `ROIs1970_fall_s1_p407.tif` pairs
-with `ROIs1970_fall_s2_p407.tif`). This has NOT been verified against an actual downloaded copy of
-the dataset (that download is a separate, deliberate multi-GB step — see the module-level note
-below) — if the real folder layout differs in some way this docstring didn't anticipate, the fix is
-localized to `_find_pairs()` below, which is the one place that encodes this assumption.
+On-disk layout, verified directly against a real download (docs/BUILD_LOG.md's M3 entry — the
+ROIs1868/summer ROI, fetched by hand since the official mediaTUM host blocks automated access):
+SAR and optical patches are distributed in separate per-*scene* folders (not one folder per ROI as
+originally assumed before checking — e.g. `s1_0/`, `s1_4/`, ... and `s2_0/`, `s2_4/`, ..., one pair
+of folders per scene index, all scene indices sharing the same ROI/season prefix), each containing
+patch files whose names differ only in the "_s1_" / "_s2_" marker (e.g.
+`ROIs1868_summer_s1_0_p407.png` pairs with `ROIs1868_summer_s2_0_p407.png`). Two things the
+original assumption (written before any real download existed) got wrong, both confirmed directly:
+files are **.png, not .tif** (rasterio reads them fine regardless — GDAL's PNG driver doesn't need
+georeferencing, it just warns once about having none), and filenames include a scene-index segment
+between the s1/s2 marker and the patch number that the first-draft example didn't anticipate.
+Neither breaks `_pair_key()`'s matching logic below (a plain marker substring swap still lines up
+correctly no matter what sits on either side of it) — only the file extension actually needed a
+code change; the docstring is what needed correcting.
 """
 
 from __future__ import annotations
@@ -43,8 +49,8 @@ _S2_MARKER = "_s2_"
 def _pair_key(filename: str) -> str | None:
     """
     Derive a key shared by a SAR/optical patch pair from a filename, e.g.
-    "ROIs1970_fall_s1_p407.tif" and "ROIs1970_fall_s2_p407.tif" both map to
-    "ROIs1970_fall_p407.tif". Returns None if the filename contains neither marker (not a
+    "ROIs1868_summer_s1_0_p407.png" and "ROIs1868_summer_s2_0_p407.png" both map to
+    "ROIs1868_summer_0_p407.png". Returns None if the filename contains neither marker (not a
     SEN1-2 patch file — ignored rather than treated as an error, since real download trees often
     include README/metadata files alongside the patches).
     """
@@ -61,7 +67,7 @@ def _find_pairs(root: str) -> list[tuple[str, str]]:
     patch identity. Returns a sorted list of (sar_path, optical_path) tuples.
 
     Split out from the dataset class specifically so the *pairing logic* can be unit-tested with
-    cheap, empty placeholder files (no real GeoTIFF content needed to test whether filenames get
+    cheap, empty placeholder files (no real image content needed to test whether filenames get
     paired correctly) — see tests/datasets/test_sen1_2.py.
 
     Raises:
@@ -72,7 +78,7 @@ def _find_pairs(root: str) -> list[tuple[str, str]]:
     sar_files: dict[str, str] = {}
     optical_files: dict[str, str] = {}
 
-    for path in sorted(glob.glob(os.path.join(root, "**", "*.tif"), recursive=True)):
+    for path in sorted(glob.glob(os.path.join(root, "**", "*.png"), recursive=True)):
         filename = os.path.basename(path)
         key = _pair_key(filename)
         if key is None:
@@ -106,9 +112,10 @@ class SEN1_2Dataset:
         sample["optical"].shape   # (256, 256, 3) -- Sentinel-2 RGB composite
 
     No `download=True` option: SEN1-2 is distributed via mediaTUM
-    (https://mediaTUM.ub.tum.de/1436631), which requires manually accepting the dataset's terms —
-    not something to automate. Download it yourself first, then point `root` at the extracted
-    directory.
+    (https://mediaTUM.ub.tum.de/1436631), which sits behind an anti-bot proof-of-work challenge
+    (Anubis) blocking automated/scripted downloads — not something to try to defeat programmatically
+    (see docs/BUILD_LOG.md's M3 entry). Download it yourself through a real browser first, then
+    point `root` at the extracted directory.
     """
 
     def __init__(self, root: str = "data/sen1_2") -> None:
@@ -126,15 +133,16 @@ class SEN1_2Dataset:
     def __getitem__(self, index: int) -> dict[str, Any]:
         sar_path, optical_path = self._pairs[index]
         return {
-            "sar": _read_geotiff_hwc(sar_path),
-            "optical": _read_geotiff_hwc(optical_path),
+            "sar": _read_raster_hwc(sar_path),
+            "optical": _read_raster_hwc(optical_path),
             "sar_path": sar_path,
             "optical_path": optical_path,
         }
 
 
-def _read_geotiff_hwc(path: str | Path) -> np.ndarray:
-    """Read a GeoTIFF via rasterio and return it as a (H, W, C) float32 array."""
+def _read_raster_hwc(path: str | Path) -> np.ndarray:
+    """Read a raster (real SEN1-2 patches are .png, not georeferenced) via rasterio and return it
+    as a (H, W, C) float32 array."""
     with rasterio.open(path) as dataset:
         array = dataset.read()  # rasterio returns (C, H, W), matching torchgeo's convention
     return chw_to_hwc(array)

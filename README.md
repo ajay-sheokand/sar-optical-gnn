@@ -10,13 +10,12 @@ full M0-M2 pipeline has been validated against a real downloaded dataset (SARpti
 finding and fixing a real segmentation bug (a hardcoded SLIC parameter that produced a rigid grid
 instead of real regions on actual SAR data) by rendering the pipeline's output with
 `scripts/visualize_sample.py` rather than trusting test counts alone. M3 (baseline models:
-pix2pix, CycleGAN) is implemented, tested (134 tests), and proven to train end-to-end on real
-SARptical data via `scripts/train_baseline.py`; the literature-comparison run on SEN1-2 is pending
-a manual download (the official host blocks automated access). See `docs/` locally for the full
-research plan, background, literature review, and a build-by-build log of what was done and why —
-that folder is intentionally git-ignored (it's local working material, not meant to ship in the
-repo), so if you're reading this on GitHub without local access to it, ask whoever's running the
-project for the docs directly.
+pix2pix, CycleGAN) is implemented and tested (134 tests); the real literature-comparison training
+run is in progress now, on a real downloaded copy of SEN1-2 (10,415 pairs). See `docs/` locally for
+the full research plan, background, literature review, and a build-by-build log of what was done
+and why — that folder is intentionally git-ignored (it's local working material, not meant to ship
+in the repo), so if you're reading this on GitHub without local access to it, ask whoever's running
+the project for the docs directly.
 
 ## The one-paragraph version
 
