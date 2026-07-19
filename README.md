@@ -5,11 +5,15 @@ Research project: SAR-to-optical image translation using a superpixel Region-Adj
 on paired Sentinel-1/Sentinel-2 imagery and evaluated against GAN/diffusion baselines plus a
 downstream land-cover-classification-fidelity check.
 
-**Status**: M0 (repo hygiene) and M1 (data pipeline) done; M2 (graph construction at scale) is
-next. See `docs/` locally for the full research plan, background, literature review, and a
-build-by-build log of what was done and why — that folder is intentionally git-ignored (it's local
-working material, not meant to ship in the repo), so if you're reading this on GitHub without local
-access to it, ask whoever's running the project for the docs directly.
+**Status**: M0 (repo hygiene), M1 (data pipeline), and M2 (graph construction at scale) done. The
+full M0-M2 pipeline has been validated against a real downloaded dataset (SARptical), including
+finding and fixing a real segmentation bug (a hardcoded SLIC parameter that produced a rigid grid
+instead of real regions on actual SAR data) by rendering the pipeline's output with
+`scripts/visualize_sample.py` rather than trusting test counts alone. M3 (baseline models:
+pix2pix, CycleGAN) is next. See `docs/` locally for the full research plan, background, literature
+review, and a build-by-build log of what was done and why — that folder is intentionally
+git-ignored (it's local working material, not meant to ship in the repo), so if you're reading this
+on GitHub without local access to it, ask whoever's running the project for the docs directly.
 
 ## The one-paragraph version
 
@@ -26,13 +30,21 @@ standard pixel-wise GAN baselines (pix2pix, CycleGAN).
 sar-optical-gnn/
 ├── src/
 │   ├── graph_builder.py    # superpixel segmentation + Region Adjacency Graph construction
+│   ├── graph/
+│   │   ├── pooling.py      # pixel<->node scatter pool (mean/max) and unpool
+│   │   └── features.py     # regionprops geometric features + channel mean/std per node
 │   └── datasets/
 │       ├── common.py       # shared CHW->HWC array conversion used by every loader
 │       ├── bigearthnet.py  # primary dataset: paired S1/S2 + real CORINE land-cover labels
 │       ├── sen1_2.py       # validation harness: reproduce literature baseline numbers on this
 │       ├── sen12ms.py      # secondary: superpixel-granularity ablation, generalization check
+│       ├── sarptical.py    # real, downloaded stretch dataset (10,108 pairs) used to validate
+│       │                   #   the whole M0-M2 pipeline against actual data
 │       └── delhi_gee.py    # Earth Engine fetch/export for the Delhi ROI qualitative demo
-├── tests/                  # mirrors src/ layout
+├── scripts/
+│   ├── build_graphs_offline.py  # precompute/cache graphs to .npz; --benchmark mode
+│   └── visualize_sample.py      # render SAR/optical/segmentation/graph for one real sample
+├── tests/                  # mirrors src/ and scripts/ layout
 ├── requirements.txt
 ├── pyproject.toml          # pytest config
 └── docs/                   # (git-ignored, local only) research plan, literature review, build log
