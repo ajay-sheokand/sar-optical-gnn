@@ -214,6 +214,21 @@ def save_checkpoint(state, out_dir: Path, epoch: int) -> Path:
     return path
 
 
+def find_latest_checkpoint(out_dir) -> Path | None:
+    """Returns the highest-epoch `epoch_NNNN.pt` file under `out_dir`, or None if there isn't
+    one. Filenames sort correctly as strings (zero-padded to 4 digits), so a plain sort works
+    without needing to parse the epoch number out first.
+
+    Why this exists: Kaggle GPU sessions are capped at roughly 9-12 continuous hours, and this
+    project's real SEN1-2 run took ~19 hours combined (docs/BUILD_LOG.md's M3 entry) -- a session
+    that gets cut off mid-run needs a way to pick back up without redoing already-completed
+    epochs. This is also exactly what would have saved the ~68 minutes of progress lost when a
+    real local run OOM'd at epoch 27 before the memory leak fix (same doc, §9b).
+    """
+    checkpoints = sorted(Path(out_dir).glob("epoch_*.pt"))
+    return checkpoints[-1] if checkpoints else None
+
+
 def log_metrics(out_dir: Path, record: dict) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     with open(out_dir / "metrics.jsonl", "a") as f:
@@ -236,7 +251,23 @@ def train_pix2pix(dataset, args, device):
     metrics = TranslationMetrics(device=device)
 
     out_dir = Path(args.out)
-    for epoch in range(1, args.epochs + 1):
+    start_epoch = 1
+    if not args.no_resume:
+        latest = find_latest_checkpoint(out_dir)
+        if latest is not None:
+            checkpoint = torch.load(latest, map_location=device, weights_only=True)
+            generator.load_state_dict(checkpoint["generator"])
+            discriminator.load_state_dict(checkpoint["discriminator"])
+            opt_g.load_state_dict(checkpoint["opt_g"])
+            opt_d.load_state_dict(checkpoint["opt_d"])
+            start_epoch = checkpoint["epoch"] + 1
+            print(f"[pix2pix] resumed from {latest} (completed through epoch {checkpoint['epoch']})")
+
+    if start_epoch > args.epochs:
+        print(f"[pix2pix] already completed {start_epoch - 1}/{args.epochs} epochs -- nothing to do")
+        return
+
+    for epoch in range(start_epoch, args.epochs + 1):
         start = time.perf_counter()
         epoch_losses = []
         for batch in train_loader:
@@ -252,7 +283,13 @@ def train_pix2pix(dataset, args, device):
         record = {"epoch": epoch, "elapsed_seconds": elapsed, "train_loss": mean_losses, "val_metrics": val_metrics}
         print(f"[pix2pix] epoch {epoch}/{args.epochs} ({elapsed:.1f}s) train={mean_losses} val={val_metrics}")
         log_metrics(out_dir, record)
-        save_checkpoint({"generator": generator.state_dict(), "discriminator": discriminator.state_dict()}, out_dir, epoch)
+        save_checkpoint({
+            "generator": generator.state_dict(),
+            "discriminator": discriminator.state_dict(),
+            "opt_g": opt_g.state_dict(),
+            "opt_d": opt_d.state_dict(),
+            "epoch": epoch,
+        }, out_dir, epoch)
 
 
 def train_cyclegan(dataset, args, device):
@@ -270,7 +307,25 @@ def train_cyclegan(dataset, args, device):
     metrics = TranslationMetrics(device=device)  # see train_pix2pix's comment on why this is reused
 
     out_dir = Path(args.out)
-    for epoch in range(1, args.epochs + 1):
+    start_epoch = 1
+    if not args.no_resume:
+        latest = find_latest_checkpoint(out_dir)
+        if latest is not None:
+            checkpoint = torch.load(latest, map_location=device, weights_only=True)
+            g_ab.load_state_dict(checkpoint["g_ab"])
+            g_ba.load_state_dict(checkpoint["g_ba"])
+            d_a.load_state_dict(checkpoint["d_a"])
+            d_b.load_state_dict(checkpoint["d_b"])
+            opt_g.load_state_dict(checkpoint["opt_g"])
+            opt_d.load_state_dict(checkpoint["opt_d"])
+            start_epoch = checkpoint["epoch"] + 1
+            print(f"[cyclegan] resumed from {latest} (completed through epoch {checkpoint['epoch']})")
+
+    if start_epoch > args.epochs:
+        print(f"[cyclegan] already completed {start_epoch - 1}/{args.epochs} epochs -- nothing to do")
+        return
+
+    for epoch in range(start_epoch, args.epochs + 1):
         start = time.perf_counter()
         epoch_losses = []
         for batch in train_loader:
@@ -287,10 +342,15 @@ def train_cyclegan(dataset, args, device):
         record = {"epoch": epoch, "elapsed_seconds": elapsed, "train_loss": mean_losses, "val_metrics": val_metrics}
         print(f"[cyclegan] epoch {epoch}/{args.epochs} ({elapsed:.1f}s) train={mean_losses} val={val_metrics}")
         log_metrics(out_dir, record)
-        save_checkpoint(
-            {"g_ab": g_ab.state_dict(), "g_ba": g_ba.state_dict(), "d_a": d_a.state_dict(), "d_b": d_b.state_dict()},
-            out_dir, epoch,
-        )
+        save_checkpoint({
+            "g_ab": g_ab.state_dict(),
+            "g_ba": g_ba.state_dict(),
+            "d_a": d_a.state_dict(),
+            "d_b": d_b.state_dict(),
+            "opt_g": opt_g.state_dict(),
+            "opt_d": opt_d.state_dict(),
+            "epoch": epoch,
+        }, out_dir, epoch)
 
 
 def main() -> None:
@@ -311,6 +371,11 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None, help="use only the first N samples (smoke-testing)")
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--no-resume", action="store_true",
+        help="ignore any existing checkpoints in --out and start from epoch 1 (default: auto-resume "
+        "from the latest epoch_NNNN.pt found there, if any -- see find_latest_checkpoint)",
+    )
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
 

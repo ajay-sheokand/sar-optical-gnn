@@ -6,6 +6,7 @@ step functions," which only a real step can catch.
 """
 
 import json
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -17,15 +18,30 @@ from scripts.train_baseline import (
     cyclegan_train_step,
     evaluate_cyclegan,
     evaluate_pix2pix,
+    find_latest_checkpoint,
     infer_channel_counts,
     log_metrics,
     pix2pix_train_step,
     save_checkpoint,
     split_dataset,
+    train_cyclegan,
+    train_pix2pix,
 )
 from src.datasets.adapter import TranslationDataset
 from src.eval.metrics import TranslationMetrics
 from src.models.losses import GANLoss
+
+
+def _make_args(out, **overrides):
+    """Minimal argparse.Namespace-alike for train_pix2pix/train_cyclegan, with small/fast
+    defaults suitable for tests (tiny generators, 1-2 epochs)."""
+    defaults = dict(
+        out=str(out), epochs=1, batch_size=2, lr=2e-4, num_downs=3, n_residual_blocks=1,
+        lambda_l1=100.0, lambda_cycle=10.0, lambda_identity=0.0, val_fraction=0.25,
+        num_workers=0, seed=0, no_resume=False,
+    )
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
 
 
 class _FakeBaseDataset:
@@ -219,3 +235,71 @@ class TestCheckpointingAndLogging:
         assert len(lines) == 2
         assert json.loads(lines[0])["epoch"] == 1
         assert json.loads(lines[1])["epoch"] == 2
+
+
+class TestFindLatestCheckpoint:
+    def test_returns_none_for_empty_dir(self, tmp_path):
+        assert find_latest_checkpoint(tmp_path) is None
+
+    def test_returns_highest_epoch_checkpoint_not_the_last_created(self, tmp_path):
+        # Created out of order deliberately -- this must sort by epoch number, not by mtime.
+        for epoch in (1, 5, 3):
+            (tmp_path / f"epoch_{epoch:04d}.pt").touch()
+        latest = find_latest_checkpoint(tmp_path)
+        assert latest.name == "epoch_0005.pt"
+
+
+class TestResume:
+    """
+    Regression coverage for a real gap flagged in docs/BUILD_LOG.md's M3 entry: a crashed local
+    run lost ~68 minutes of progress (26 completed epochs) because train_baseline.py had no way to
+    pick back up from a checkpoint. Also a real prerequisite for running training on Kaggle, whose
+    GPU sessions are capped well under this project's own ~19-hour combined run time -- a session
+    that gets cut off needs `--out` pointed at the same directory to just continue, not restart.
+    """
+
+    def test_train_pix2pix_resumes_instead_of_restarting(self, tmp_path, tiny_dataset):
+        device = torch.device("cpu")
+        train_pix2pix(tiny_dataset, _make_args(tmp_path, epochs=2), device)
+        first_run_epochs = [json.loads(l)["epoch"] for l in (tmp_path / "metrics.jsonl").read_text().strip().split("\n")]
+        assert first_run_epochs == [1, 2]
+
+        train_pix2pix(tiny_dataset, _make_args(tmp_path, epochs=4), device)
+        all_epochs = [json.loads(l)["epoch"] for l in (tmp_path / "metrics.jsonl").read_text().strip().split("\n")]
+        assert all_epochs == [1, 2, 3, 4]  # continued at 3, did not redo 1-2
+
+    def test_train_cyclegan_resumes_instead_of_restarting(self, tmp_path, tiny_dataset):
+        device = torch.device("cpu")
+        train_cyclegan(tiny_dataset, _make_args(tmp_path, epochs=2), device)
+        first_run_epochs = [json.loads(l)["epoch"] for l in (tmp_path / "metrics.jsonl").read_text().strip().split("\n")]
+        assert first_run_epochs == [1, 2]
+
+        train_cyclegan(tiny_dataset, _make_args(tmp_path, epochs=3), device)
+        all_epochs = [json.loads(l)["epoch"] for l in (tmp_path / "metrics.jsonl").read_text().strip().split("\n")]
+        assert all_epochs == [1, 2, 3]
+
+    def test_no_resume_flag_starts_over(self, tmp_path, tiny_dataset):
+        device = torch.device("cpu")
+        train_pix2pix(tiny_dataset, _make_args(tmp_path, epochs=2), device)
+        train_pix2pix(tiny_dataset, _make_args(tmp_path, epochs=2, no_resume=True), device)
+
+        all_epochs = [json.loads(l)["epoch"] for l in (tmp_path / "metrics.jsonl").read_text().strip().split("\n")]
+        assert all_epochs == [1, 2, 1, 2]  # second run redid 1-2 instead of resuming
+
+    def test_already_completed_run_is_a_noop(self, tmp_path, tiny_dataset):
+        device = torch.device("cpu")
+        train_pix2pix(tiny_dataset, _make_args(tmp_path, epochs=2), device)
+        train_pix2pix(tiny_dataset, _make_args(tmp_path, epochs=2), device)  # same target, already done
+
+        all_epochs = [json.loads(l)["epoch"] for l in (tmp_path / "metrics.jsonl").read_text().strip().split("\n")]
+        assert all_epochs == [1, 2]  # nothing appended a second time
+
+    def test_resumed_run_restores_optimizer_state_not_just_weights(self, tmp_path, tiny_dataset):
+        """Resuming only the model weights (not Adam's momentum buffers) would silently degrade
+        training every time a session restarts -- checked directly rather than assumed."""
+        device = torch.device("cpu")
+        train_pix2pix(tiny_dataset, _make_args(tmp_path, epochs=1), device)
+
+        checkpoint = torch.load(find_latest_checkpoint(tmp_path), weights_only=True)
+        assert "opt_g" in checkpoint and "opt_d" in checkpoint
+        assert len(checkpoint["opt_g"]["state"]) > 0  # Adam has real accumulated per-param state
