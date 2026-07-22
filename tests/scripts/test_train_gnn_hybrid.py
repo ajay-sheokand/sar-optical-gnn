@@ -18,6 +18,7 @@ from scripts.train_gnn_hybrid import (
     evaluate_gnn_hybrid,
     gnn_hybrid_train_step,
     infer_dims,
+    prune_checkpoints,
     train_gnn_hybrid,
 )
 from src.datasets.graph_dataset import GraphHybridDataset
@@ -52,7 +53,7 @@ def _make_args(out, **overrides):
     defaults = dict(
         out=str(out), epochs=1, lr=2e-4, num_downs=3, gnn_hidden_dim=8, gnn_layers=2,
         no_graph_branch=False, lambda_l1=100.0, lambda_node_aux=10.0, val_fraction=0.34,
-        num_workers=0, seed=0, no_resume=False,
+        num_workers=0, seed=0, no_resume=False, keep_every_n_checkpoints=5,
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -183,6 +184,42 @@ class TestEvaluateGnnHybrid:
 
         assert np.isfinite(result["psnr"])
         assert np.isfinite(result["ssim"])
+
+
+class TestPruneCheckpoints:
+    """Regression coverage for the disk-usage fix this project needed to run M4 on Kaggle: each
+    checkpoint is ~550MB (generator + discriminator + both Adam optimizer states), and an unpruned
+    80-epoch run would blow past Kaggle's 20GB /kaggle/working output cap around epoch 36."""
+
+    def test_keeps_every_nth_epoch_and_deletes_the_rest(self, tmp_path):
+        for epoch in range(1, 11):
+            (tmp_path / f"epoch_{epoch:04d}.pt").write_bytes(b"x")
+
+        prune_checkpoints(tmp_path, keep_every=5, current_epoch=10)
+
+        remaining = sorted(p.name for p in tmp_path.glob("epoch_*.pt"))
+        assert remaining == ["epoch_0005.pt", "epoch_0010.pt"]
+
+    def test_always_keeps_the_current_epoch_even_if_not_a_multiple(self, tmp_path):
+        for epoch in range(1, 8):
+            (tmp_path / f"epoch_{epoch:04d}.pt").write_bytes(b"x")
+
+        prune_checkpoints(tmp_path, keep_every=5, current_epoch=7)
+
+        remaining = sorted(p.name for p in tmp_path.glob("epoch_*.pt"))
+        assert remaining == ["epoch_0005.pt", "epoch_0007.pt"]
+
+    def test_disabled_by_zero_via_the_training_loop(self, tmp_path, cached_dataset):
+        """keep_every_n_checkpoints=0 must skip pruning entirely (used by the local/smoke-test
+        path, where nothing needs to disappear)."""
+        device = torch.device("cpu")
+        args = _make_args(tmp_path, epochs=3, keep_every_n_checkpoints=0)
+
+        train_gnn_hybrid(cached_dataset, args, device)
+
+        assert sorted(p.name for p in tmp_path.glob("epoch_*.pt")) == [
+            "epoch_0001.pt", "epoch_0002.pt", "epoch_0003.pt",
+        ]
 
 
 class TestTrainGnnHybridEndToEnd:

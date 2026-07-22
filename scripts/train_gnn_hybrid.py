@@ -55,6 +55,21 @@ def ensure_graphs_cached(base_dataset, cache_dir: Path, num_segments: int) -> No
         cache_graph(sample["sar"], path, num_segments=num_segments)
 
 
+def prune_checkpoints(out_dir: Path, keep_every: int, current_epoch: int) -> None:
+    """Deletes old epoch_*.pt files except every `keep_every`th one and the just-saved current
+    epoch. Needed on Kaggle specifically: each checkpoint here is ~550MB (U-Net generator +
+    PatchGAN discriminator + both Adam optimizer states), and train_baseline.py's save_checkpoint
+    never prunes -- fine for local disk, but an unpruned 80-epoch Kaggle run would hit the
+    platform's 20GB /kaggle/working output cap around epoch 36, long before training finishes.
+    Keeping every 5th epoch (the default) preserves a checkpoint history for
+    scripts/watch_and_render.sh's visual spot-checks while keeping total disk bounded."""
+    for path in out_dir.glob("epoch_*.pt"):
+        epoch = int(path.stem.split("_")[1])
+        if epoch % keep_every == 0 or epoch == current_epoch:
+            continue
+        path.unlink()
+
+
 def infer_dims(dataset):
     """Peek at one sample to get the channel/feature-vector dimensions GraphHybridGenerator's
     constructor needs fixed at build time (same reasoning as train_baseline.py's
@@ -189,6 +204,8 @@ def train_gnn_hybrid(dataset, args, device):
             "opt_d": opt_d.state_dict(),
             "epoch": epoch,
         }, out_dir, epoch)
+        if args.keep_every_n_checkpoints > 0:
+            prune_checkpoints(out_dir, args.keep_every_n_checkpoints, epoch)
 
 
 def main() -> None:
@@ -211,6 +228,10 @@ def main() -> None:
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--no-resume", action="store_true", help="ignore existing checkpoints in --out")
+    parser.add_argument(
+        "--keep-every-n-checkpoints", type=int, default=5,
+        help="prune epoch_*.pt files except every Nth epoch and the latest (0 disables pruning)",
+    )
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
 
